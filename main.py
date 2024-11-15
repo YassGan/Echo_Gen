@@ -1,9 +1,5 @@
 import pyaudio
 import wave
-import torch
-import torchaudio
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
-import torchaudio.transforms as T
 
 # Parameters for audio recording
 FORMAT = pyaudio.paInt16  # Audio format (16-bit)
@@ -25,7 +21,7 @@ print("Recording...")
 frames = []
 
 # Record for 5 seconds
-for i in range(int(RATE / CHUNK * 4)):  # Record 4 chunks (4 seconds)
+for i in range(int(RATE / CHUNK * 4)):
     data = stream.read(CHUNK)
     frames.append(data)
 
@@ -45,28 +41,46 @@ with wave.open(OUTPUT_FILENAME, 'wb') as wf:
 
 print(f"Audio file saved as {OUTPUT_FILENAME}")
 
-# --- Begin Transcription --- #
 
-# Load Wav2Vec2 model and processor
-processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
-model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
+import speech_recognition as sr
 
-# Load the audio file using torchaudio
-waveform, sample_rate = torchaudio.load(OUTPUT_FILENAME)
+# Initialize recognizer
+recognizer = sr.Recognizer()
 
-# Resample to 16kHz if the sample rate is not 16kHz
-if sample_rate != 16000:
-    resampler = T.Resample(orig_freq=sample_rate, new_freq=16000)
-    waveform = resampler(waveform)
-    sample_rate = 16000
+# Load the audio file
+audio_file = "output.wav"
 
-# Ensure the waveform is 2D (batch_size, num_samples)
-waveform = waveform.squeeze()  # Remove extra dimensions if necessary
-input_values = processor(waveform, return_tensors="pt", sampling_rate=sample_rate).input_values
+# Open the audio file and use the recognizer to recognize speech
+with sr.AudioFile(audio_file) as source:
+    print("Listening...")
+    audio_data = recognizer.record(source)  # Record the audio data
 
-# Transcription
-logits = model(input_values).logits
-predicted_ids = torch.argmax(logits, dim=-1)
-transcription = processor.decode(predicted_ids[0])
+    # Convert the audio to text using Google's web-based STT engine
+    try:
+        print("Recognizing...")
+        text = recognizer.recognize_google(audio_data)  # Google Web Speech API
+        print(f"Transcription: {text}")
+    except sr.UnknownValueError:
+        print("Google Speech Recognition could not understand the audio.")
+    except sr.RequestError as e:
+        print(f"Could not request results from Google Speech Recognition service; {e}")
 
-print("Transcription:", transcription)
+
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
+# Load GPT-2 model
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+model = GPT2LMHeadModel.from_pretrained("gpt2")
+
+# Set pad_token_id to eos_token_id to avoid warnings
+model.config.pad_token_id = model.config.eos_token_id
+
+# Generate response
+def generate_response(prompt):
+    inputs = tokenizer.encode(prompt, return_tensors="pt")
+    # Use the attention_mask to handle padding properly
+    outputs = model.generate(inputs, max_length=50, num_return_sequences=1)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+response = generate_response("User said: " + text)
+print("AI Response:", response)
